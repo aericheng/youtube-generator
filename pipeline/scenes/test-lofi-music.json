@@ -1,0 +1,6 @@
+{
+  "id": "test-lofi-music",
+  "audio": {"gain_db": -6},
+  "audio_prompt": "lofi hip hop beat, chill relaxed tempo 70 bpm, warm mellow rhodes piano chords, soft vinyl crackle, gentle boom bap drums, cozy nostalgic mood, instrumental, high quality",
+  "audio_negative_prompt": "voices, vocals, speech, harsh, distortion, fast tempo"
+}

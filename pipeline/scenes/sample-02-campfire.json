@@ -1,0 +1,19 @@
+{
+  "id": "sample-02-campfire",
+  "title": "篝火營地（夜間野營氛圍）",
+  "style_note": "深夜營火，暖色火光對比冷色夜空，沉浸式第一人稱",
+  "width": 768,
+  "height": 1344,
+  "seconds_per_image": 5,
+  "crossfade": 1.0,
+  "audio": {"type": "fire", "gain_db": -6},
+  "negative_prompt": "text, watermark, logo, people, hands, faces, illustration, cartoon, painting, flat design, anime, blurry mess, deformed, low quality",
+  "prompts": [
+    "crackling campfire at night in a pine forest, glowing embers rising, deep blue starry sky, cinematic photograph, photorealistic, vertical composition",
+    "close-up photograph of burning logs with orange flames and glowing coals, dark background, warm light, photorealistic, high detail",
+    "photograph of a campfire beside a calm lake at night, reflection of flames on water, mountain silhouette, starry sky, cinematic, photorealistic",
+    "sparks and embers floating up from a bonfire into the dark, bokeh, warm orange against black, photograph, photorealistic, tranquil",
+    "close-up photograph of firewood stack beside a glowing campfire on flat stones, warm light on moss, night forest, photorealistic, vertical composition",
+    "dying campfire with glowing red embers under a wide starry sky, milky way visible, serene night camping scene, photorealistic photograph"
+  ]
+}

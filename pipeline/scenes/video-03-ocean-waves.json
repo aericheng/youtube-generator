@@ -1,0 +1,8 @@
+{
+  "id": "video-03-ocean-waves",
+  "title": "海浪（單一場景真動態）",
+  "audio": {"type": "waves", "gain_db": -6},
+  "audio_prompt": "gentle ocean waves rolling onto a sandy beach, rhythmic wash and retreat, soft sea foam, distant calm sea ambience, field recording, high quality, no music",
+  "video_prompt": "Static aerial top-down shot of turquoise ocean waves gently rolling onto a white sand beach, white foam spreading and receding rhythmically, sun glitter on the water surface, meditative and calm, photorealistic, no camera movement",
+  "negative_prompt": "text, watermark, logo, people, boats, camera shake, fast motion, scene change, cartoon, illustration, low quality, distortion"
+}

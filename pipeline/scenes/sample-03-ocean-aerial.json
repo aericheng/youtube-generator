@@ -1,0 +1,19 @@
+{
+  "id": "sample-03-ocean-aerial",
+  "title": "海浪空拍（清爽日光系）",
+  "style_note": "空拍海岸線與浪花，明亮通透、高飽和藍綠色系",
+  "width": 768,
+  "height": 1344,
+  "seconds_per_image": 5,
+  "crossfade": 1.0,
+  "audio": {"type": "waves", "gain_db": -6},
+  "negative_prompt": "text, watermark, logo, people, boats, buildings, blurry mess, deformed, low quality",
+  "prompts": [
+    "aerial top-down view of turquoise ocean waves breaking on white sand beach, foam patterns, bright daylight, photorealistic, vertical composition",
+    "drone view of deep blue ocean with gentle rolling waves, sun glitter on water surface, minimalist, photorealistic, calm",
+    "aerial view of waves crashing on dark volcanic rocks, white foam swirls, dramatic texture, photorealistic, vertical composition",
+    "top-down aerial of shallow tropical lagoon, gradient from turquoise to deep blue, sandbar patterns, photorealistic, serene",
+    "aerial shot of long peeling wave along an empty golden beach at golden hour, soft warm light, photorealistic, vertical composition",
+    "bird's eye view of gentle ocean swell in open sea, deep blue with subtle foam lines, meditative minimal seascape, photorealistic"
+  ]
+}

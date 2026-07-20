@@ -1,0 +1,7 @@
+{
+  "id": "video-01-rain-window",
+  "title": "雨天窗景（單一場景真動態）",
+  "audio": {"type": "rain", "gain_db": -6},
+  "video_prompt": "Static camera shot of raindrops sliding down a window pane at dusk, warm blurred city lights bokeh in the background, a steaming mug on the windowsill in soft focus, water drops trickling and merging on the glass, cozy cinematic atmosphere, photorealistic, no camera movement",
+  "negative_prompt": "text, watermark, logo, people, hands, camera shake, fast motion, scene change, cartoon, illustration, low quality, distortion"
+}

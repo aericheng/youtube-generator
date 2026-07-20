@@ -1,0 +1,20 @@
+{
+  "channel_style": "photoreal",
+  "style_suffixes": {
+    "lofi": "warm cozy lofi anime illustration style, soft painterly textures, muted warm colors, gentle nostalgic atmosphere, static camera, no camera movement",
+    "photoreal": "photorealistic, cinematic, shallow depth of field, static camera, no camera movement"
+  },
+  "video_negative_prompt": "text, watermark, logo, people, hands, faces, camera shake, fast motion, scene change, low quality, distortion, noise, mosaic, pixelated",
+  "music_prompts": [
+    "lofi hip hop beat, chill relaxed tempo 70 bpm, warm mellow rhodes piano chords, soft vinyl crackle, gentle boom bap drums, cozy nostalgic mood, instrumental, high quality",
+    "lofi hip hop instrumental, slow dreamy tempo, soft electric piano melody, tape hiss warmth, laid back drums, calm night study mood, high quality",
+    "chill lofi beat, mellow jazzy guitar chords, dusty vinyl texture, relaxed drum groove, warm bass, peaceful evening mood, instrumental, high quality"
+  ],
+  "music_negative_prompt": "voices, vocals, speech, harsh, distortion, fast tempo, aggressive",
+  "target_seconds": 75,
+  "clip_seconds": 5,
+  "upload_privacy": "private",
+  "music_gain_db": -6,
+  "ambient_gain_db": -14,
+  "metadata_footer": "Music & ambience generated with Stable Audio Open. Powered by Stability AI.\nVisuals are AI-generated (altered or synthetic content)."
+}
