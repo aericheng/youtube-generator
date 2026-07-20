@@ -1,0 +1,19 @@
+{
+  "id": "sample-01-rain-window",
+  "title": "雨天窗景（cozy 室內視角）",
+  "style_note": "溫暖室內看向雨窗，柔焦、電影感、寫實偏繪畫質感",
+  "width": 768,
+  "height": 1344,
+  "seconds_per_image": 5,
+  "crossfade": 1.0,
+  "audio": {"type": "rain", "gain_db": -6},
+  "negative_prompt": "text, watermark, logo, people, hands, blurry mess, deformed, low quality, jpeg artifacts",
+  "prompts": [
+    "rain drops on a window pane at dusk, warm bokeh city lights outside, cozy interior windowsill with a steaming mug, cinematic soft light, photorealistic, moody, vertical composition",
+    "close-up of raindrops sliding down glass, blurred warm lamp glow behind, shallow depth of field, cinematic, photorealistic, calm atmosphere",
+    "rainy window with a small potted plant on the windowsill, soft grey-blue daylight, gentle reflections, photorealistic, tranquil, vertical composition",
+    "wet window glass with streaks of rain, out-of-focus street lights in blue hour, warm interior reflection, cinematic film still, photorealistic",
+    "cozy reading nook by a rainy window, open book and blanket, warm lamp light, rain streaks on glass, cinematic, photorealistic, vertical composition",
+    "raindrops racing down a dark window at night, golden bokeh from distant traffic, quiet mood, photorealistic, cinematic lighting"
+  ]
+}
