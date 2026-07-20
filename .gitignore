@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 output/
 secrets/
+TASK-STATE.md
+TASK-STATE.local.md
