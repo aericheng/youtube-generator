@@ -106,18 +106,21 @@ def main() -> None:
         return
 
     yt = yt_client()
+    failed = 0
     for video, meta_file, meta in todo:
         print(f"uploading [{privacy}]: {video.name}", flush=True)
         try:
             vid = upload(yt, video, meta, privacy)
         except Exception as e:
             print(f"FAILED {video.name}: {e}", file=sys.stderr)
+            failed += 1
             continue
         meta["videoId"] = vid
         meta["uploaded_privacy"] = privacy
         meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
                              encoding="utf-8")
         print(f"OK: https://youtu.be/{vid}")
+    sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":
