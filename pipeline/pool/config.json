@@ -13,7 +13,7 @@
   "music_negative_prompt": "voices, vocals, speech, harsh, distortion, fast tempo, aggressive",
   "target_seconds": 75,
   "clip_seconds": 5,
-  "upload_privacy": "private",
+  "upload_privacy": "public",
   "music_gain_db": -6,
   "ambient_gain_db": -14,
   "metadata_footer": "Music & ambience generated with Stable Audio Open. Powered by Stability AI.\nVisuals are AI-generated (altered or synthetic content)."

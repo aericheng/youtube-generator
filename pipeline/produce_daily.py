@@ -13,30 +13,69 @@ import math
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 POOL = ROOT / "pipeline" / "pool"
 PY = sys.executable
 XF = 1.5
+GPU_NEED_MB = 12000    # T2V wants nearly the whole 16 GB card
+GPU_TRIES = 5          # VRAM re-checks before giving up for the day
+GPU_WAIT_MIN = 15      # minutes between re-checks
+STEP_TIMEOUT_MIN = 30  # per-step hard cap (a normal full run is ~20 min)
+GEN_TIMEOUT_MIN = 60   # T2V denoise cap; 6x slowdown means GPU contention
 
 
 def done_already(p: Path) -> bool:
     return p.exists() and p.stat().st_size > 0
 
 
-def run(cmd: list, **kw) -> subprocess.CompletedProcess:
-    r = subprocess.run([str(c) for c in cmd], capture_output=True, text=True, **kw)
-    if r.returncode != 0:
-        raise RuntimeError(f"step failed: {cmd[:3]}...\n{r.stdout[-800:]}\n{r.stderr[-800:]}")
-    return r
+def run(cmd: list, timeout_min: float = STEP_TIMEOUT_MIN) -> subprocess.CompletedProcess:
+    """Hard cap per step: a stalled child would otherwise hold RAM+VRAM
+    indefinitely, so on timeout the whole process tree gets killed."""
+    cmd = [str(c) for c in cmd]
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        out, err = p.communicate(timeout=timeout_min * 60)
+    except subprocess.TimeoutExpired:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
+        p.communicate()
+        raise RuntimeError(f"step timed out after {timeout_min} min (tree killed): {cmd[:3]}...")
+    if p.returncode != 0:
+        raise RuntimeError(f"step failed: {cmd[:3]}...\n{out[-800:]}\n{err[-800:]}")
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
 
 
 def duration_of(path: Path) -> float:
     r = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(path)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, timeout=60)
     m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", r.stderr)
     return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+
+
+def free_vram_mb() -> int:
+    r = subprocess.run(["nvidia-smi", "--query-gpu=memory.free",
+                        "--format=csv,noheader,nounits"],
+                       capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError(f"nvidia-smi failed:\n{r.stderr[-400:]}")
+    return int(r.stdout.strip().splitlines()[0])
+
+
+def wait_for_gpu(need_mb: int, tries: int, wait_min: int) -> bool:
+    """Generation needs nearly the whole card. If something else (a game left
+    on overnight) holds it, wait it out and eventually skip the day cleanly --
+    generating anyway grinds ~6x slower and drags the whole machine down."""
+    for i in range(tries):
+        free = free_vram_mb()
+        if free >= need_mb:
+            return True
+        print(f"GPU busy: {free} MiB free < {need_mb} MiB needed "
+              f"(check {i + 1}/{tries})", flush=True)
+        if i < tries - 1:
+            time.sleep(wait_min * 60)
+    return False
 
 
 def pick_topic(topics: list, state: dict, forced: str | None) -> dict:
@@ -106,6 +145,13 @@ def main() -> None:
         print(json.dumps({"topic": topic["id"], "seed": seed, "workdir": str(work)}, indent=2))
         return
     work.mkdir(parents=True, exist_ok=True)
+    master = work / "clip_master.mp4"
+    music, ambient = work / "music.m4a", work / "ambient.m4a"
+    if not all(done_already(p) for p in (master, music, ambient)):
+        if not wait_for_gpu(GPU_NEED_MB, GPU_TRIES, GPU_WAIT_MIN):
+            with open(ROOT / "output" / "queue" / "production.log", "a", encoding="utf-8") as f:
+                f.write(f"{date} {topic['id']} SKIPPED gpu busy\n")
+            sys.exit(2)
     style = cfg["style_suffixes"][cfg["channel_style"]]
     video_prompt = f"{topic['subject']}, {style}"
 
@@ -114,10 +160,10 @@ def main() -> None:
              "negative_prompt": cfg["video_negative_prompt"]}
     scene_file = work / "scene.json"
     scene_file.write_text(json.dumps(scene, ensure_ascii=False), encoding="utf-8")
-    master = work / "clip_master.mp4"
     if not done_already(master):
         run([PY, ROOT / "pipeline" / "generate_video.py", scene_file,
-             "--seconds", cfg["clip_seconds"], "--steps", 35, "--seed", seed, "--out", master])
+             "--seconds", cfg["clip_seconds"], "--steps", 35, "--seed", seed, "--out", master],
+            timeout_min=GEN_TIMEOUT_MIN)
     print(f"[1/5] master clip done", flush=True)
 
     # 2) 2x slow motion -> 10s continuous take (no joints, no drift)
@@ -135,7 +181,7 @@ def main() -> None:
                      "audio": {"gain_db": cfg["ambient_gain_db"]}}
     (work / "music_scene.json").write_text(json.dumps(music_scene), encoding="utf-8")
     (work / "ambient_scene.json").write_text(json.dumps(ambient_scene), encoding="utf-8")
-    music, ambient, mixed = work / "music.m4a", work / "ambient.m4a", work / "mix.m4a"
+    mixed = work / "mix.m4a"
     if not done_already(music):
         run([PY, ROOT / "pipeline" / "make_ambient_ai.py", work / "music_scene.json",
              "--seconds", 47, "--seed", seed, "--out", music])
