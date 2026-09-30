@@ -6,3 +6,10 @@ output/
 secrets/
 TASK-STATE.md
 TASK-STATE.local.md
+.env
+.env.*
+pipeline/pool/state.json
+state.json
+audit/
+data/
+backup-*/
