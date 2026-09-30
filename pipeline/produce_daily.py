@@ -63,12 +63,17 @@ def free_vram_mb() -> int:
     return int(r.stdout.strip().splitlines()[0])
 
 
+LAST_FREE_MB = -1  # last VRAM reading seen by wait_for_gpu (for the failure note)
+
+
 def wait_for_gpu(need_mb: int, tries: int, wait_min: int) -> bool:
     """Generation needs nearly the whole card. If something else (a game left
     on overnight) holds it, wait it out and eventually skip the day cleanly --
     generating anyway grinds ~6x slower and drags the whole machine down."""
+    global LAST_FREE_MB
     for i in range(tries):
         free = free_vram_mb()
+        LAST_FREE_MB = free
         if free >= need_mb:
             return True
         print(f"GPU busy: {free} MiB free < {need_mb} MiB needed "
@@ -151,6 +156,16 @@ def main() -> None:
         if not wait_for_gpu(GPU_NEED_MB, GPU_TRIES, GPU_WAIT_MIN):
             with open(ROOT / "output" / "queue" / "production.log", "a", encoding="utf-8") as f:
                 f.write(f"{date} {topic['id']} SKIPPED gpu busy\n")
+            waited = (GPU_TRIES - 1) * GPU_WAIT_MIN
+            try:  # human-readable reason for scripts/daily_status.py (never block the exit)
+                (ROOT / "data").mkdir(exist_ok=True)
+                (ROOT / "data" / "last-failure-reason.txt").write_text(
+                    f"{date}\n"
+                    f"GPU \u88ab\u4f54\u7528\uff1a\u6700\u5f8c\u4e00\u6b21\u5269 {LAST_FREE_MB} MiB\uff0c"
+                    f"\u9700\u8981 {GPU_NEED_MB} MiB\uff0c\u5df2\u7b49 {waited} \u5206\u9418\n",
+                    encoding="utf-8")
+            except Exception:
+                pass
             sys.exit(2)
     style = cfg["style_suffixes"][cfg["channel_style"]]
     video_prompt = f"{topic['subject']}, {style}"
