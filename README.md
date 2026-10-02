@@ -5,11 +5,11 @@ Stable Audio Open music/ambience), fully local on one RTX 5070 Ti.
 
 ## Daily chain
 
-`LofiShortsDaily` (Windows Task Scheduler, 03:30)
+`LofiShortsDaily` (Windows Task Scheduler, 07:00)
 → `run_daily_hidden.vbs` → `run_daily.cmd`
 → `pipeline/produce_daily.py` (topic pick → T2V master clip → slow-motion →
 music + ambience mix → loop assembly → QC → queue)
-→ `pipeline/upload_queue.py --max 1`
+→ `pipeline/upload_queue.py` (1 per run; 2 when more than 3 videos are waiting)
 
 Output lands in `output/queue/<date>-<topic>/` (final mp4 + `metadata.json`).
 Logs: `output/queue/scheduler.log` (full run output),
@@ -22,8 +22,8 @@ running overnight — denoise ground at 109 s/it (normal ~20), crashed after ste
 1/35, and the leftover contention dragged the whole machine down for hours.
 
 - **VRAM pre-check** — `produce_daily.py` checks free VRAM via `nvidia-smi`
-  before any GPU step. Below `GPU_NEED_MB` (12000 MiB) it re-checks
-  `GPU_TRIES` (5) times every `GPU_WAIT_MIN` (15) minutes, then skips the day:
+  before any GPU step. Below `GPU_NEED_MB` (12000 MiB) it checks
+  `GPU_TRIES` (6) times every `GPU_WAIT_MIN` (30) minutes (at most 150 min of waiting), then skips the day:
   writes `<date> <topic> SKIPPED gpu busy` to `production.log` and exits 2.
 - **Step watchdog** — every external step goes through `run()` with a hard
   timeout: `STEP_TIMEOUT_MIN` (30 min) default, `GEN_TIMEOUT_MIN` (60 min) for

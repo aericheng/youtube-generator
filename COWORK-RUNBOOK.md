@@ -133,5 +133,5 @@
 
 ## 6. 你完成後，本機系統會接手的事（背景資訊，不用執行）
 
-- 排程 `LofiShortsDaily` 每日 03:30 產片＋呼叫 `upload_queue.py --max 1`（token 就位後自動生效，過審前維持 private 模式所以不會動正式影片——`upload_privacy` 設定在 `pipeline/pool/config.json`）。
+- 排程 `LofiShortsDaily` 每日 03:30 產片＋呼叫 `upload_queue.py`（token 就位後自動生效，過審前維持 private 模式所以不會動正式影片——`upload_privacy` 設定在 `pipeline/pool/config.json`）。
 - audit 過審通知送達後，使用者把 `upload_privacy` 改為 `"public"`，全線無人化完成。

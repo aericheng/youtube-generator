@@ -1,7 +1,8 @@
 """Upload finished queue videos to YouTube via the official Data API.
 
 Scans output/queue/*/metadata.json for entries without a videoId, uploads
-the oldest ones (up to --max per run), and writes the videoId back so a
+the oldest ones (up to --max per run; default 2 when more than BACKLOG_BOOST
+videos are waiting, else 1), and writes the videoId back so a
 video is never uploaded twice.
 
 Safety gate: queue uploads only run when pipeline/pool/config.json has
@@ -10,7 +11,7 @@ compliance audit). Pre-audit API uploads are permanently locked private, so
 uploading real videos before approval would destroy them. For pre-audit
 smoke testing use pipeline/yt_smoketest.py with a throwaway file instead.
 
-Usage: python pipeline/upload_queue.py [--max 1] [--dry-run]
+Usage: python pipeline/upload_queue.py [--max N] [--dry-run]
 """
 import argparse
 import json
@@ -30,6 +31,8 @@ QUEUE = ROOT / "output" / "queue"
 SECRETS = ROOT / "secrets"
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 CATEGORY_MUSIC = "10"
+BACKLOG_BOOST = 3   # more than this many pending videos -> upload 2 per run instead of 1
+UPLOAD_RETRIES = 3  # googleapiclient retries transient 5xx/network errors per chunk
 
 
 def yt_client():
@@ -73,7 +76,7 @@ def upload(yt, video: Path, meta: dict, privacy: str) -> str:
     req = yt.videos().insert(part="snippet,status", body=body, media_body=media)
     resp = None
     while resp is None:
-        status, resp = req.next_chunk()
+        status, resp = req.next_chunk(num_retries=UPLOAD_RETRIES)
         if status:
             print(f"  {int(status.progress() * 100)}%", flush=True)
     return resp["id"]
@@ -81,13 +84,16 @@ def upload(yt, video: Path, meta: dict, privacy: str) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--max", type=int, default=1)
+    ap.add_argument("--max", type=int, default=None,
+                    help="videos to upload this run (default: 2 if backlog > 3, else 1)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     cfg = json.loads((ROOT / "pipeline" / "pool" / "config.json").read_text(encoding="utf-8"))
     privacy = cfg.get("upload_privacy", "private")
-    todo = pending_videos()[: args.max]
+    pending = pending_videos()
+    limit = args.max if args.max is not None else (2 if len(pending) > BACKLOG_BOOST else 1)
+    todo = pending[:limit]
     if not todo:
         print("nothing to upload")
         return

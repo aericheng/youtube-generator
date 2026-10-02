@@ -21,8 +21,8 @@ POOL = ROOT / "pipeline" / "pool"
 PY = sys.executable
 XF = 1.5
 GPU_NEED_MB = 12000    # T2V wants nearly the whole 16 GB card
-GPU_TRIES = 5          # VRAM re-checks before giving up for the day
-GPU_WAIT_MIN = 15      # minutes between re-checks
+GPU_TRIES = 6          # VRAM checks before giving up for the day (6 x 30 min => waits at most 150 min,
+GPU_WAIT_MIN = 30      # leaving room for a normal run inside the 4 h task limit)
 STEP_TIMEOUT_MIN = 30  # per-step hard cap (a normal full run is ~20 min)
 GEN_TIMEOUT_MIN = 60   # T2V denoise cap; 6x slowdown means GPU contention
 
