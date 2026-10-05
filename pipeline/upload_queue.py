@@ -29,7 +29,11 @@ from googleapiclient.http import MediaFileUpload
 ROOT = Path(__file__).resolve().parent.parent
 QUEUE = ROOT / "output" / "queue"
 SECRETS = ROOT / "secrets"
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",       # video stats
+    "https://www.googleapis.com/auth/yt-analytics.readonly",  # traffic sources
+]
 CATEGORY_MUSIC = "10"
 BACKLOG_BOOST = 3   # more than this many pending videos -> upload 2 per run instead of 1
 UPLOAD_RETRIES = 3  # googleapiclient retries transient 5xx/network errors per chunk
