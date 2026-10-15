@@ -11,6 +11,7 @@
     "chill lofi beat, mellow jazzy guitar chords, dusty vinyl texture, relaxed drum groove, warm bass, peaceful evening mood, instrumental, high quality"
   ],
   "music_negative_prompt": "voices, vocals, speech, harsh, distortion, fast tempo, aggressive",
+  "loop_units": 1,
   "target_seconds": 75,
   "clip_seconds": 5,
   "upload_privacy": "public",

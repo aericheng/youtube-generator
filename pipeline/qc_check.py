@@ -4,12 +4,17 @@ Uses only ffmpeg (no ffprobe needed): stream info is parsed from `ffmpeg -i`
 stderr, loudness from the volumedetect filter.
 
 Usage: python qc_check.py <video.mp4> [--min-sec 15] [--max-sec 60]
+       python qc_check.py <video.mp4> --loop-units 1 --unit-sec 8.5 [--json-out qc.json]
+(--loop-units/--unit-sec derive the duration range from loop_units x unit length.)
+Also reports motion_score (mean frame-to-frame luma difference); informational only.
 Exits 1 with a FAIL list if any check fails.
 """
 import argparse
+import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 
 def probe(path: str) -> dict:
@@ -36,12 +41,38 @@ def mean_volume(path: str) -> float:
     return float(m.group(1)) if m else float("nan")
 
 
+def motion_score(path: str) -> float:
+    """Mean YDIF (average absolute luma change vs the previous frame) from
+    ffmpeg signalstats on a downscaled copy. Low = near-static picture."""
+    r = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "info", "-i", path,
+         "-vf", "scale=270:480,signalstats,metadata=mode=print",
+         "-an", "-f", "null", "-"],
+        capture_output=True, text=True,
+    )
+    vals = [float(v) for v in re.findall(r"signalstats\.YDIF=([\d.]+)", r.stderr)]
+    return round(sum(vals) / len(vals), 4) if vals else float("nan")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("video")
     ap.add_argument("--min-sec", type=float, default=15)
     ap.add_argument("--max-sec", type=float, default=60)
+    ap.add_argument("--loop-units", type=int, default=None)
+    ap.add_argument("--unit-sec", type=float, default=None)
+    ap.add_argument("--json-out", default=None)
+    ap.add_argument("--motion-only", action="store_true",
+                    help="print motion_score only (no pass/fail checks)")
     args = ap.parse_args()
+
+    if args.motion_only:
+        print(motion_score(args.video))
+        return
+    if args.loop_units and args.unit_sec:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import metadata as md
+        args.min_sec, args.max_sec = md.duration_bounds(args.loop_units, args.unit_sec)
 
     info = probe(args.video)
     vol = mean_volume(args.video)
@@ -49,11 +80,15 @@ def main() -> None:
     checks = {
         f"resolution 1080x1920 (got {info['width']}x{info['height']})":
             info["width"] == 1080 and info["height"] == 1920,
-        f"duration {args.min_sec}-{args.max_sec}s (got {info['duration']:.1f}s)":
+        f"duration {args.min_sec:.1f}-{args.max_sec:.1f}s (got {info['duration']:.1f}s)":
             args.min_sec <= info["duration"] <= args.max_sec,
         "has audio stream": info["has_audio"],
         f"mean volume -35..-10 dB (got {vol:.1f} dB)": -35 <= vol <= -10,
     }
+    score = motion_score(args.video)
+    print(f"INFO motion_score {score}")
+    if args.json_out:
+        Path(args.json_out).write_text(json.dumps({"motion_score": score}), encoding="utf-8")
     failed = [name for name, ok in checks.items() if not ok]
     for name, ok in checks.items():
         print(("PASS " if ok else "FAIL ") + name)

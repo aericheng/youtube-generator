@@ -4,7 +4,11 @@
 Output lands in output/queue/<date>-<topic>/ with final mp4 + metadata.json.
 State (rotation, seeds) lives in pipeline/pool/state.json.
 
-Usage: python produce_daily.py [--topic <id>] [--target-sec N] [--dry-run]
+Usage: python produce_daily.py [--topic <id>] [--target-sec N] [--dry-run] [--preview]
+
+Length is `loop_units` (config.json) repeats of the ~8.5 s loop unit; --target-sec
+overrides it with the old "repeat until ~N seconds" behaviour. --preview writes to
+output/preview/ and leaves state.json and output/queue/ untouched.
 """
 import argparse
 import datetime
@@ -16,10 +20,14 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import metadata as md  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 POOL = ROOT / "pipeline" / "pool"
 PY = sys.executable
 XF = 1.5
+SEAM_FADE = 0.25      # afade in/out so Shorts auto-replay has no click at the seam
 GPU_NEED_MB = 12000    # T2V wants nearly the whole 16 GB card
 GPU_TRIES = 6          # VRAM checks before giving up for the day (6 x 30 min => waits at most 150 min,
 GPU_WAIT_MIN = 30      # leaving room for a normal run inside the 4 h task limit)
@@ -114,13 +122,14 @@ def slow_motion(clip: Path, out: Path) -> None:
          "-pix_fmt", "yuv420p", out])
 
 
-def assemble_repeat(unit: Path, audio: Path, out: Path, target: float) -> float:
+def assemble_repeat(unit: Path, audio: Path, out: Path, reps: int) -> float:
     unit_len = duration_of(unit)
-    reps = max(1, round(target / unit_len))
+    reps = max(1, reps)
     total = reps * unit_len
     run(["ffmpeg", "-y", "-stream_loop", str(reps - 1), "-i", unit,
          "-stream_loop", "-1", "-i", audio,
          "-vf", "scale=1080:1920:flags=lanczos",
+         "-af", f"afade=t=in:st=0:d={SEAM_FADE},afade=t=out:st={total - SEAM_FADE:.3f}:d={SEAM_FADE}",
          "-t", f"{total:.3f}",
          "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
          "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", out])
@@ -132,6 +141,8 @@ def main() -> None:
     ap.add_argument("--topic", default=None)
     ap.add_argument("--target-sec", type=float, default=None)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--preview", action="store_true",
+                    help="write to output/preview/, do not touch state.json or the queue")
     args = ap.parse_args()
 
     cfg = json.loads((POOL / "config.json").read_text(encoding="utf-8"))
@@ -142,9 +153,13 @@ def main() -> None:
     topic = pick_topic(topics, state, args.topic)
     counter = state.get("counter", 0)
     seed = counter * 13 + 7
-    target = args.target_sec or cfg["target_seconds"]
+    loop_units = md.get_loop_units(cfg)
     date = datetime.date.today().isoformat()
-    work = ROOT / "output" / "queue" / f"{date}-{topic['id']}"
+    if args.preview:
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        work = ROOT / "output" / "preview" / f"{stamp}-{topic['id']}"
+    else:
+        work = ROOT / "output" / "queue" / f"{date}-{topic['id']}"
 
     if args.dry_run:
         print(json.dumps({"topic": topic["id"], "seed": seed, "workdir": str(work)}, indent=2))
@@ -154,6 +169,8 @@ def main() -> None:
     music, ambient = work / "music.m4a", work / "ambient.m4a"
     if not all(done_already(p) for p in (master, music, ambient)):
         if not wait_for_gpu(GPU_NEED_MB, GPU_TRIES, GPU_WAIT_MIN):
+            if args.preview:  # previews must not touch the real queue log or failure note
+                sys.exit(2)
             with open(ROOT / "output" / "queue" / "production.log", "a", encoding="utf-8") as f:
                 f.write(f"{date} {topic['id']} SKIPPED gpu busy\n")
             waited = (GPU_TRIES - 1) * GPU_WAIT_MIN
@@ -221,23 +238,32 @@ def main() -> None:
     unit = work / "loop_unit.mp4"
     build_loop_unit(slowmo, unit)
     final = work / f"{scene['id']}.mp4"
-    total = assemble_repeat(unit, mix_loop, final, target)
+    unit_len = duration_of(unit)
+    if args.target_sec:  # legacy behaviour: repeat until ~N seconds
+        loop_units = max(1, round(args.target_sec / unit_len))
+    total = assemble_repeat(unit, mix_loop, final, loop_units)
     print(f"[4/5] assembled {total:.1f}s ({duration_of(slowmo):.1f}s continuous take)", flush=True)
 
     # 5) QC + metadata + state
     run([PY, ROOT / "pipeline" / "qc_check.py", final,
-         "--min-sec", target * 0.8, "--max-sec", target * 1.3])
+         "--loop-units", loop_units, "--unit-sec", unit_len, "--json-out", work / "qc.json"])
+    taken = md.taken_titles(ROOT / "output" / "queue", md.channel_titles(ROOT))
     meta = {
-        "title": topic["title"],
-        "description": f"{topic['title']}\n\nSit back, relax and enjoy.\n\n"
-                       f"{cfg['metadata_footer']}",
-        "tags": ["lofi", "ambience", "relaxing", "asmr", "chill", topic["category"]],
+        **md.build_metadata(topic, cfg["metadata_footer"], taken),
         "ai_disclosure": True,
         "topic_id": topic["id"], "seed": seed, "duration_sec": round(total, 1),
+        "loop_units": loop_units,
         "created": date,
     }
+    try:
+        meta["motion_score"] = json.loads((work / "qc.json").read_text(encoding="utf-8"))["motion_score"]
+    except (OSError, KeyError, ValueError):
+        pass
     (work / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2),
                                         encoding="utf-8")
+    if args.preview:
+        print(f"[5/5] preview only (state and queue untouched): {final}", flush=True)
+        return
     used = state.get("used", [])
     used.append(topic["id"])
     all_ids = {t["id"] for t in topics}
