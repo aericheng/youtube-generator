@@ -148,6 +148,8 @@
 
 ## 附錄：查證報告
 
+（以下為本機筆記，未收進 public repo。）
+
 - `research/research-api.md` — YouTube Data API 能力、配額、audit 門檻（官方文件逐條引用）
 - `research/research-policy.md` — AI 揭露、inauthentic content、ToS、風險分級表（10 項）
 - `research/research-production.md` — 六條製作路線的價格與可用性（官方 pricing 頁，2026-07-11 查證）
