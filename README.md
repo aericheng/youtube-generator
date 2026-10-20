@@ -21,10 +21,22 @@ Added after the 2026-07-23 incident: the 03:30 run collided with a game left
 running overnight — denoise ground at 109 s/it (normal ~20), crashed after step
 1/35, and the leftover contention dragged the whole machine down for hours.
 
-- **VRAM pre-check** — `produce_daily.py` checks free VRAM via `nvidia-smi`
-  before any GPU step. Below `GPU_NEED_MB` (12000 MiB) it checks
-  `GPU_TRIES` (6) times every `GPU_WAIT_MIN` (30) minutes (at most 150 min of waiting), then skips the day:
-  writes `<date> <topic> SKIPPED gpu busy` to `production.log` and exits 2.
+- **Runs last (idle gate)** — added 2026-10-21 after the 07:00 run started next
+  to an RL training run and a 6-worker validation job (VRAM full, RAM into
+  compression). Before any GPU step `produce_daily.py` waits until the whole
+  machine is idle: free VRAM ≥ `GPU_NEED_MB` (12000 MiB), no other python process
+  holding ≥ `OTHER_GPU_MB` (256 MiB) of VRAM (read from the Windows
+  `GPU Process Memory` counter), available RAM ≥ `RAM_FREE_GB` (16), CPU over a
+  60 s sample < `CPU_BUSY_PCT` (30 %). It never starts inside `NO_START`
+  (11:30–13:00, lab-slack-watch's 12:30 meeting ASR). Busy → re-check every
+  `IDLE_CHECK_MIN` (15) minutes; no idle slot by `IDLE_DEADLINE` (20:30) → skip
+  the day: writes `<date> <topic> SKIPPED gpu busy` to `production.log`, the
+  reason to `data/last-failure-reason.txt`, and exits 2. The process sets itself
+  to idle CPU priority (children inherit it), and the `LofiShortsDaily` task runs
+  at priority 10 with a 16 h limit to cover the wait. Tests:
+  `python tests/test_idle_gate.py`.
+  The gate only decides when to start: a heavy job launched mid-run still
+  competes with it until the step watchdog below.
 - **Step watchdog** — every external step goes through `run()` with a hard
   timeout: `STEP_TIMEOUT_MIN` (30 min) default, `GEN_TIMEOUT_MIN` (60 min) for
   T2V; a normal full run is ~20 min total. On timeout the whole process tree

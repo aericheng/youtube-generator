@@ -20,6 +20,8 @@ import sys
 import time
 from pathlib import Path
 
+import psutil
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import metadata as md  # noqa: E402
 
@@ -29,8 +31,15 @@ PY = sys.executable
 XF = 1.5
 SEAM_FADE = 0.25      # afade in/out so Shorts auto-replay has no click at the seam
 GPU_NEED_MB = 12000    # T2V wants nearly the whole 16 GB card
-GPU_TRIES = 6          # VRAM checks before giving up for the day (6 x 30 min => waits at most 150 min,
-GPU_WAIT_MIN = 30      # leaving room for a normal run inside the 4 h task limit)
+# This job runs last: it only starts once the whole machine is idle, otherwise it
+# keeps waiting (2026-10-21: it started next to an RL training run and a 6-worker
+# validation job, filled VRAM and pushed RAM into compression).
+IDLE_CHECK_MIN = 15    # re-check interval while the machine is busy
+IDLE_DEADLINE = "20:30"  # last start; a run (~20 min, 60 min cap) ends before lab-slack-watch 21:30
+NO_START = [("11:30", "13:00")]  # lab-slack-watch Meeting ASR at 12:30 needs ~7 GB VRAM
+CPU_BUSY_PCT = 30      # system-wide CPU over a 60 s sample (idle desktop ~5-15 %)
+RAM_FREE_GB = 16       # available RAM needed (T2V takes ~5 GB on top of what is in use)
+OTHER_GPU_MB = 256     # another python holding this much VRAM = someone's training/inference
 STEP_TIMEOUT_MIN = 30  # per-step hard cap (a normal full run is ~20 min)
 GEN_TIMEOUT_MIN = 60   # T2V denoise cap; 6x slowdown means GPU contention
 
@@ -71,24 +80,85 @@ def free_vram_mb() -> int:
     return int(r.stdout.strip().splitlines()[0])
 
 
-LAST_FREE_MB = -1  # last VRAM reading seen by wait_for_gpu (for the failure note)
+def other_gpu_pythons(min_mb: int) -> list:
+    """Python processes outside this run holding >= min_mb of dedicated VRAM.
+    Under WDDM nvidia-smi reports N/A per process; the GPU Process Memory
+    counter does not. If the counter is unavailable, rely on the other checks."""
+    ps = (r"(Get-Counter '\GPU Process Memory(*)\Dedicated Usage').CounterSamples | "
+          r"ForEach-Object { '{0} {1}' -f $_.InstanceName, [int64]$_.CookedValue }")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                           capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return []
+    if r.returncode != 0:
+        return []
+    used = {}
+    for line in r.stdout.splitlines():
+        m = re.match(r"pid_(\d+)_\S*\s+(\d+)$", line.strip())
+        if m:  # one instance per adapter, so sum per pid
+            used[int(m.group(1))] = used.get(int(m.group(1)), 0) + int(m.group(2))
+    me = psutil.Process()
+    mine = {me.pid, *(c.pid for c in me.children(recursive=True))}
+    found = []
+    for pid, b in used.items():
+        if pid in mine or b < min_mb * 2**20:
+            continue
+        try:
+            name = psutil.Process(pid).name()
+        except psutil.Error:
+            continue
+        if name.lower().startswith("python"):
+            found.append(f"{name} pid {pid} {b // 2**20} MiB")
+    return found
 
 
-def wait_for_gpu(need_mb: int, tries: int, wait_min: int) -> bool:
-    """Generation needs nearly the whole card. If something else (a game left
-    on overnight) holds it, wait it out and eventually skip the day cleanly --
-    generating anyway grinds ~6x slower and drags the whole machine down."""
-    global LAST_FREE_MB
-    for i in range(tries):
+def busy_reason() -> str | None:
+    """None when the machine is idle enough to generate; else what is in the way."""
+    try:  # a transient nvidia-smi failure must not end a 13 h wait
         free = free_vram_mb()
-        LAST_FREE_MB = free
-        if free >= need_mb:
+    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
+        return f"nvidia-smi unavailable ({type(e).__name__})"
+    if free < GPU_NEED_MB:
+        return f"VRAM {free} MiB free < {GPU_NEED_MB} MiB"
+    others = other_gpu_pythons(OTHER_GPU_MB)
+    if others:
+        return "GPU in use by " + ", ".join(others)
+    avail = psutil.virtual_memory().available / 2**30
+    if avail < RAM_FREE_GB:
+        return f"RAM {avail:.1f} GB available < {RAM_FREE_GB} GB"
+    cpu = psutil.cpu_percent(interval=60)
+    if cpu >= CPU_BUSY_PCT:
+        return f"CPU {cpu:.0f}% >= {CPU_BUSY_PCT}%"
+    return None
+
+
+def today_at(hhmm: str) -> datetime.datetime:
+    h, m = map(int, hhmm.split(":"))
+    return datetime.datetime.now().replace(hour=h, minute=m, second=0, microsecond=0)
+
+
+LAST_BUSY = ""  # last reason seen by wait_until_idle (for the failure note)
+
+
+def wait_until_idle() -> bool:
+    """This job runs last. While anything else uses the GPU, CPU or RAM, or a
+    no-start window is on, wait; at IDLE_DEADLINE give up for the day cleanly.
+    Generating anyway grinds ~6x slower and drags the whole machine down
+    (2026-07-23 game left on overnight, 2026-10-21 RL training + validation)."""
+    global LAST_BUSY
+    deadline = today_at(IDLE_DEADLINE)
+    while True:
+        now = datetime.datetime.now()
+        window = next((e for s, e in NO_START if today_at(s) <= now < today_at(e)), None)
+        reason = f"no-start window until {window}" if window else busy_reason()
+        if reason is None:
             return True
-        print(f"GPU busy: {free} MiB free < {need_mb} MiB needed "
-              f"(check {i + 1}/{tries})", flush=True)
-        if i < tries - 1:
-            time.sleep(wait_min * 60)
-    return False
+        LAST_BUSY = reason
+        print(f"{now:%H:%M} waiting: {reason}", flush=True)
+        if now + datetime.timedelta(minutes=IDLE_CHECK_MIN) > deadline:
+            return False
+        time.sleep(IDLE_CHECK_MIN * 60)
 
 
 def pick_topic(topics: list, state: dict, forced: str | None) -> dict:
@@ -165,21 +235,26 @@ def main() -> None:
         print(json.dumps({"topic": topic["id"], "seed": seed, "workdir": str(work)}, indent=2))
         return
     work.mkdir(parents=True, exist_ok=True)
+    try:  # lowest CPU priority; the T2V and ffmpeg children inherit it
+        psutil.Process().nice(psutil.IDLE_PRIORITY_CLASS)
+    except Exception:
+        pass
     master = work / "clip_master.mp4"
     music, ambient = work / "music.m4a", work / "ambient.m4a"
     if not all(done_already(p) for p in (master, music, ambient)):
-        if not wait_for_gpu(GPU_NEED_MB, GPU_TRIES, GPU_WAIT_MIN):
+        started = time.time()
+        if not wait_until_idle():
             if args.preview:  # previews must not touch the real queue log or failure note
                 sys.exit(2)
             with open(ROOT / "output" / "queue" / "production.log", "a", encoding="utf-8") as f:
                 f.write(f"{date} {topic['id']} SKIPPED gpu busy\n")
-            waited = (GPU_TRIES - 1) * GPU_WAIT_MIN
+            waited = round((time.time() - started) / 60)
             try:  # human-readable reason for scripts/daily_status.py (never block the exit)
                 (ROOT / "data").mkdir(exist_ok=True)
                 (ROOT / "data" / "last-failure-reason.txt").write_text(
                     f"{date}\n"
-                    f"GPU \u88ab\u4f54\u7528\uff1a\u6700\u5f8c\u4e00\u6b21\u5269 {LAST_FREE_MB} MiB\uff0c"
-                    f"\u9700\u8981 {GPU_NEED_MB} MiB\uff0c\u5df2\u7b49 {waited} \u5206\u9418\n",
+                    f"\u96fb\u8166\u5fd9\u788c\uff1a{LAST_BUSY}\uff0c\u5df2\u7b49 {waited}"
+                    f" \u5206\u9418\uff0c\u5230 {IDLE_DEADLINE} \u90fd\u6c92\u6709\u7a7a\u6a94\n",
                     encoding="utf-8")
             except Exception:
                 pass
