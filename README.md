@@ -51,3 +51,41 @@ All knobs are constants at the top of `pipeline/produce_daily.py`.
 continues from whatever artifacts already exist in the day's folder. A partial
 folder can never upload: `upload_queue.py` only picks folders that have both
 `metadata.json` and the final mp4.
+
+## Weekly report
+
+`LofiWeeklyReport` (Task Scheduler, Mondays 08:40) → `run_weekly_hidden.vbs` →
+`run_weekly.cmd` → `scripts/weekly_report.py` posts one Discord message (same
+webhook as the daily failure alerts) with four blocks: views and watch time of
+the last 7 days (Analytics API `reports.query`, window = today-7 .. yesterday),
+subscribers gained/lost, top 3 videos by views (titles via Data API
+`videos.list`), and the run-log success rate (today-7 .. today from
+`output/queue/scheduler.log`: scheduled runs, exitcode 0, produce OK, videos
+uploaded). On success it writes `data/last-success-weekly`; on failure
+`run_weekly.cmd` raises a `weekly` alert through `daily_status.py`. Output of
+the task: `output/queue/weekly.log`.
+
+**First time: authorize once by hand.** The token needs the
+`yt-analytics.readonly` and `youtube.readonly` scopes (both are listed in
+`pipeline/yt_auth.py`). If `secrets/token.json` was issued without them, the
+report exits 2 and tells you to re-run the consent:
+
+```
+.venv\Scripts\python.exe scripts\weekly_report.py --auth
+```
+
+(equivalent to `pipeline/yt_auth.py`; a browser opens, pick the channel
+account, then "Advanced" → continue, allow all scopes; token is rewritten to
+`secrets/token.json`).
+
+Dry run (prints the report and writes `data/weekly-report-<date>.md`, posts
+nothing):
+
+```
+.venv\Scripts\python.exe scripts\weekly_report.py --dry-run          # real Analytics data
+.venv\Scripts\python.exe scripts\weekly_report.py --dry-run --mock   # fixture views/subs, real run log
+```
+
+`--mock` is refused without `--dry-run`, so fixture data never reaches Discord.
+Register the task (after authorizing):
+`powershell -ExecutionPolicy Bypass -File scripts\register-weekly.ps1`.
