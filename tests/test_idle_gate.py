@@ -65,7 +65,7 @@ def test_gives_up_at_deadline():
     install(c, ["GPU in use by python.exe pid 1 473 MiB"])
     assert p.wait_until_idle() is False
     assert p.LAST_BUSY.startswith("GPU in use")
-    assert c.now <= real_dt.datetime(2026, 10, 21, 20, 30)
+    assert c.now <= real_dt.datetime(2026, 10, 21, 19, 40)
 
 
 def test_no_start_window_skips_probe():
@@ -83,6 +83,45 @@ def test_after_deadline_checks_once():
     c2 = Clock("21:00")
     install(c2, [None])
     assert p.wait_until_idle() is True
+
+
+def test_mid_run_start_refused_after_its_deadline():
+    c = Clock("19:45")
+    install(c, [None])
+    assert p.clear_to_start("19:40") is False
+
+
+def test_mid_run_start_allowed_before_its_deadline():
+    c = Clock("19:45")
+    install(c, [None])
+    assert p.clear_to_start("20:10") is True
+
+
+def test_mid_run_start_allowed_after_reserved_slot():
+    c = Clock("22:30")  # a manual evening rerun collides with nothing
+    install(c, [None])
+    assert p.clear_to_start("19:40") is True
+
+
+def test_fallback_waits_until_its_own_deadline():
+    c = Clock("19:50")  # past IDLE_DEADLINE: a brief CPU spike must not cost the day
+    install(c, ["CPU 54% >= 30%", None])
+    assert p.clear_to_start("20:10") is True
+    assert c.sleeps == 1
+
+
+def test_mid_run_start_refused_when_busy():
+    c = Clock("20:00")
+    install(c, ["VRAM 4000 MiB free < 14000 MiB"])
+    assert p.clear_to_start("20:10") is False
+    assert p.LAST_BUSY.startswith("VRAM")
+
+
+def test_mid_run_start_waits_out_no_start_window():
+    c = Clock("11:30")
+    install(c, [None])
+    assert p.clear_to_start("19:40") is True
+    assert c.now >= real_dt.datetime(2026, 10, 21, 13, 0)
 
 
 def test_nvidia_smi_failure_counts_as_busy():

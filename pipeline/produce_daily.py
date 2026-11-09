@@ -1,5 +1,6 @@
-"""Daily lofi short producer: pick topic -> master clip -> I2V motion variants
--> shuffled seamless assembly -> lofi music + ambience mix -> QC -> queue.
+"""Daily lofi short producer: pick topic -> master clip (A14B + upscale, person check,
+Wan 5B as fallback) -> slow motion -> self-looped unit -> lofi music + ambience mix
+-> QC -> queue.
 
 Output lands in output/queue/<date>-<topic>/ with final mp4 + metadata.json.
 State (rotation, seeds) lives in pipeline/pool/state.json.
@@ -15,6 +16,7 @@ import datetime
 import json
 import math
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -30,36 +32,45 @@ POOL = ROOT / "pipeline" / "pool"
 PY = sys.executable
 XF = 1.5
 SEAM_FADE = 0.25      # afade in/out so Shorts auto-replay has no click at the seam
-GPU_NEED_MB = 12000    # T2V wants nearly the whole 16 GB card
+GPU_NEED_MB = 14000    # A14B peaks at 12.6 GiB (12900 MiB) of the 16 GB card
 # This job runs last: it only starts once the whole machine is idle, otherwise it
 # keeps waiting (2026-10-21: it started next to an RL training run and a 6-worker
 # validation job, filled VRAM and pushed RAM into compression).
 IDLE_CHECK_MIN = 15    # re-check interval while the machine is busy
-IDLE_DEADLINE = "20:30"  # last start; a run (~20 min, 60 min cap) ends before lab-slack-watch 21:30
-NO_START = [("11:30", "13:00")]  # lab-slack-watch Meeting ASR at 12:30 needs ~7 GB VRAM
+IDLE_DEADLINE = "19:40"  # last start; a run (~70 min, about 110 at the A14B cap) ends before lab-slack-watch 21:30
+FALLBACK_DEADLINE = "20:10"  # last start of Wan 5B after A14B gave up (60 min cap + about 20 min of later steps)
+RESERVED_AT = "21:30"  # lab-slack-watch; the deadlines above only apply before it
+NO_START = [("10:40", "13:00")]  # same cap ahead of lab-slack-watch Meeting ASR at 12:30 (~7 GB VRAM)
 CPU_BUSY_PCT = 30      # system-wide CPU over a 60 s sample (idle desktop ~5-15 %)
-RAM_FREE_GB = 16       # available RAM needed (T2V takes ~5 GB on top of what is in use)
+RAM_FREE_GB = 24       # available RAM needed (A14B holds both transformers in RAM while offloading)
 OTHER_GPU_MB = 256     # another python holding this much VRAM = someone's training/inference
-STEP_TIMEOUT_MIN = 30  # per-step hard cap (a normal full run is ~20 min)
-GEN_TIMEOUT_MIN = 60   # T2V denoise cap; 6x slowdown means GPU contention
+STEP_TIMEOUT_MIN = 30  # per-step hard cap for everything but generation
+GEN_TIMEOUT_MIN = 60   # Wan 5B cap (normal ~20 min); the slowdown means GPU contention
+A14B_TIMEOUT_MIN = 90  # A14B cap (normal ~57 min)
+A14B_ATTEMPTS = 2      # each is an hour, so one retry; after that Wan 5B
+EMPTY_SCENE = "empty scene, nobody present, "  # A14B put legs into a tent without this
 
 
 def done_already(p: Path) -> bool:
     return p.exists() and p.stat().st_size > 0
 
 
-def run(cmd: list, timeout_min: float = STEP_TIMEOUT_MIN) -> subprocess.CompletedProcess:
+def run(cmd: list, timeout_min: float = STEP_TIMEOUT_MIN,
+        ok_codes: tuple = (0,)) -> subprocess.CompletedProcess:
     """Hard cap per step: a stalled child would otherwise hold RAM+VRAM
     indefinitely, so on timeout the whole process tree gets killed."""
     cmd = [str(c) for c in cmd]
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # backslashreplace: the scheduled run is cp950, and a stray byte in a child's log must
+    # not end it. "replace" would not do: U+FFFD cannot be printed back out in cp950.
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True, errors="backslashreplace")
     try:
         out, err = p.communicate(timeout=timeout_min * 60)
     except subprocess.TimeoutExpired:
         subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
         p.communicate()
         raise RuntimeError(f"step timed out after {timeout_min} min (tree killed): {cmd[:3]}...")
-    if p.returncode != 0:
+    if p.returncode not in ok_codes:
         raise RuntimeError(f"step failed: {cmd[:3]}...\n{out[-800:]}\n{err[-800:]}")
     return subprocess.CompletedProcess(cmd, p.returncode, out, err)
 
@@ -141,13 +152,13 @@ def today_at(hhmm: str) -> datetime.datetime:
 LAST_BUSY = ""  # last reason seen by wait_until_idle (for the failure note)
 
 
-def wait_until_idle() -> bool:
+def wait_until_idle(last_start: str = IDLE_DEADLINE) -> bool:
     """This job runs last. While anything else uses the GPU, CPU or RAM, or a
-    no-start window is on, wait; at IDLE_DEADLINE give up for the day cleanly.
+    no-start window is on, wait; at last_start give up for the day cleanly.
     Generating anyway grinds ~6x slower and drags the whole machine down
     (2026-07-23 game left on overnight, 2026-10-21 RL training + validation)."""
     global LAST_BUSY
-    deadline = today_at(IDLE_DEADLINE)
+    deadline = today_at(last_start)
     while True:
         now = datetime.datetime.now()
         window = next((e for s, e in NO_START if today_at(s) <= now < today_at(e)), None)
@@ -161,6 +172,21 @@ def wait_until_idle() -> bool:
         time.sleep(IDLE_CHECK_MIN * 60)
 
 
+def clear_to_start(last_start: str) -> bool:
+    """Gate for GPU work in the middle of a run. wait_until_idle says yes to any idle
+    machine, which is right for a first start at any hour, but a retry or fallback
+    must also finish before RESERVED_AT."""
+    global LAST_BUSY
+    LAST_BUSY = ""  # a reason from the morning's wait would explain the wrong refusal
+    if not wait_until_idle(last_start):
+        return False
+    return not today_at(last_start) < datetime.datetime.now() < today_at(RESERVED_AT)
+
+
+class NoSlot(Exception):
+    """A14B gave up and Wan 5B has no safe time to run today."""
+
+
 def pick_topic(topics: list, state: dict, forced: str | None) -> dict:
     if forced:
         return next(t for t in topics if t["id"] == forced)
@@ -169,6 +195,59 @@ def pick_topic(topics: list, state: dict, forced: str | None) -> dict:
     pool = [t for t in topics if t["category"] == want]
     fresh = [t for t in pool if t["id"] not in used] or pool
     return fresh[0]
+
+
+def shows_person(clip: Path) -> bool:
+    return run([PY, ROOT / "pipeline" / "qc_people.py", clip], ok_codes=(0, 3)).returncode == 3
+
+
+def a14b_clip(work: Path, scene_file: Path, seed: int, attempt: int) -> Path:
+    """One A14B take, cropped and upscaled to 1080x1920 at 16 fps."""
+    take = work / f"a14b_{attempt}"
+    run([PY, ROOT / "pipeline" / "generate_video_a14b.py", scene_file,
+         "--seed", seed + attempt * 1000, "--out-dir", take],
+        timeout_min=A14B_TIMEOUT_MIN)
+    clip = take / "clip.mp4"
+    run([PY, ROOT / "pipeline" / "upscale_clip.py", take / "frames", clip])
+    return clip
+
+
+def remove_takes(work: Path) -> None:
+    for take in work.glob("a14b_*"):
+        shutil.rmtree(take, ignore_errors=True)
+
+
+def make_master(work: Path, scene_file: Path, seed: int, seconds, master: Path) -> str | None:
+    """A14B first, Wan 5B when A14B keeps showing people or breaks. Returns the
+    engine that produced `master`, or None when no clean clip came out. Raises NoSlot
+    when 5B has no safe time to run. The master only appears after the person check,
+    so a rerun never trusts an unchecked clip."""
+    for attempt in range(A14B_ATTEMPTS):
+        if attempt and not clear_to_start(IDLE_DEADLINE):
+            print("no time left for another A14B take", flush=True)
+            break
+        try:
+            clip = a14b_clip(work, scene_file, seed, attempt)
+            if not shows_person(clip):
+                clip.replace(master)
+                remove_takes(work)
+                return "a14b"
+            print(f"A14B take {attempt + 1} shows a person", flush=True)
+        except RuntimeError as e:  # a crash or timeout will not fix itself on a new seed
+            print(f"A14B failed, using Wan 5B: {e}", flush=True)
+            break
+    if not clear_to_start(FALLBACK_DEADLINE):
+        raise NoSlot(LAST_BUSY or f"past {FALLBACK_DEADLINE}")
+    fallback = work / "clip_5b.mp4"
+    run([PY, ROOT / "pipeline" / "generate_video.py", scene_file,
+         "--seconds", seconds, "--steps", 35, "--seed", seed, "--out", fallback],
+        timeout_min=GEN_TIMEOUT_MIN)
+    if shows_person(fallback):
+        print("Wan 5B also shows a person", flush=True)
+        return None
+    fallback.replace(master)
+    remove_takes(work)
+    return "5b"
 
 
 def build_loop_unit(clip: Path, out: Path) -> None:
@@ -204,6 +283,18 @@ def assemble_repeat(unit: Path, audio: Path, out: Path, reps: int) -> float:
          "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
          "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", out])
     return total
+
+
+def skip_day(date: str, topic_id: str, log_reason: str, note: str) -> None:
+    """Log a skipped day and leave a readable reason for scripts/daily_status.py."""
+    with open(ROOT / "output" / "queue" / "production.log", "a", encoding="utf-8") as f:
+        f.write(f"{date} {topic_id} SKIPPED {log_reason}\n")
+    try:  # never block the exit
+        (ROOT / "data").mkdir(exist_ok=True)
+        (ROOT / "data" / "last-failure-reason.txt").write_text(f"{date}\n{note}\n", encoding="utf-8")
+    except Exception:
+        pass
+    sys.exit(2)
 
 
 def main() -> None:
@@ -246,32 +337,36 @@ def main() -> None:
         if not wait_until_idle():
             if args.preview:  # previews must not touch the real queue log or failure note
                 sys.exit(2)
-            with open(ROOT / "output" / "queue" / "production.log", "a", encoding="utf-8") as f:
-                f.write(f"{date} {topic['id']} SKIPPED gpu busy\n")
             waited = round((time.time() - started) / 60)
-            try:  # human-readable reason for scripts/daily_status.py (never block the exit)
-                (ROOT / "data").mkdir(exist_ok=True)
-                (ROOT / "data" / "last-failure-reason.txt").write_text(
-                    f"{date}\n"
-                    f"\u96fb\u8166\u5fd9\u788c\uff1a{LAST_BUSY}\uff0c\u5df2\u7b49 {waited}"
-                    f" \u5206\u9418\uff0c\u5230 {IDLE_DEADLINE} \u90fd\u6c92\u6709\u7a7a\u6a94\n",
-                    encoding="utf-8")
-            except Exception:
-                pass
-            sys.exit(2)
+            skip_day(date, topic["id"], "gpu busy",
+                     f"\u96fb\u8166\u5fd9\u788c\uff1a{LAST_BUSY}\uff0c\u5df2\u7b49 {waited}"
+                     f" \u5206\u9418\uff0c\u5230 {IDLE_DEADLINE} \u90fd\u6c92\u6709\u7a7a\u6a94")
     style = cfg["style_suffixes"][cfg["channel_style"]]
-    video_prompt = f"{topic['subject']}, {style}"
+    video_prompt = f"{EMPTY_SCENE}{topic['subject']}, {style}"
 
     # 1) master clip (T2V)
     scene = {"id": f"{date}-{topic['id']}", "video_prompt": video_prompt,
              "negative_prompt": cfg["video_negative_prompt"]}
     scene_file = work / "scene.json"
     scene_file.write_text(json.dumps(scene, ensure_ascii=False), encoding="utf-8")
+    engine_file = work / "engine.txt"
     if not done_already(master):
-        run([PY, ROOT / "pipeline" / "generate_video.py", scene_file,
-             "--seconds", cfg["clip_seconds"], "--steps", 35, "--seed", seed, "--out", master],
-            timeout_min=GEN_TIMEOUT_MIN)
-    print(f"[1/5] master clip done", flush=True)
+        try:
+            engine = make_master(work, scene_file, seed, cfg["clip_seconds"], master)
+        except NoSlot as e:
+            if args.preview:
+                sys.exit(2)
+            skip_day(date, topic["id"], "gpu busy",
+                     f"A14B 沒有可用的畫面，備援 5B 也沒有安全的時段：{e}")
+        if engine is None:
+            if args.preview:
+                sys.exit(2)
+            skip_day(date, topic["id"], "person in picture",
+                     "A14B 和 5B 產出的畫面都有人，"
+                     "今天不出片")
+        engine_file.write_text(engine, encoding="utf-8")
+    engine = engine_file.read_text(encoding="utf-8") if engine_file.exists() else "unknown"
+    print(f"[1/5] master clip done ({engine})", flush=True)
 
     # 2) 2x slow motion -> 10s continuous take (no joints, no drift)
     slowmo = work / "slowmo.mp4"
@@ -327,7 +422,7 @@ def main() -> None:
         **md.build_metadata(topic, cfg["metadata_footer"], taken),
         "ai_disclosure": True,
         "topic_id": topic["id"], "seed": seed, "duration_sec": round(total, 1),
-        "loop_units": loop_units,
+        "loop_units": loop_units, "video_engine": engine,
         "created": date,
     }
     try:
@@ -347,7 +442,7 @@ def main() -> None:
     state.update({"counter": counter + 1, "last_category": topic["category"], "used": used})
     state_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
     with open(ROOT / "output" / "queue" / "production.log", "a", encoding="utf-8") as f:
-        f.write(f"{date} {topic['id']} seed={seed} dur={total:.1f}s OK\n")
+        f.write(f"{date} {topic['id']} seed={seed} dur={total:.1f}s engine={engine} OK\n")
     print(f"[5/5] queued: {final}", flush=True)
 
 

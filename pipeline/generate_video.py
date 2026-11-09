@@ -51,7 +51,8 @@ def main() -> None:
     ).frames[0]
     dt = time.perf_counter() - t0
 
-    export_to_video(frames, str(out), fps=FPS)
+    # Default quality=5 throws away about 30% of the fine detail before any later step.
+    export_to_video(frames, str(out), fps=FPS, quality=10)
     print(f"done: {out} ({len(frames)} frames, {args.seconds:.0f}s) generated in {dt/60:.1f} min")
 
 

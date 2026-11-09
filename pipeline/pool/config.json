@@ -4,7 +4,7 @@
     "lofi": "warm cozy lofi anime illustration style, soft painterly textures, muted warm colors, gentle nostalgic atmosphere, static camera, no camera movement",
     "photoreal": "photorealistic, cinematic, shallow depth of field, static camera, no camera movement"
   },
-  "video_negative_prompt": "text, watermark, logo, people, hands, faces, camera shake, fast motion, scene change, low quality, distortion, noise, mosaic, pixelated",
+  "video_negative_prompt": "text, watermark, logo, people, person, human, man, woman, hands, faces, legs, feet, arms, body, silhouette of a person, camera shake, fast motion, scene change, low quality, distortion, noise, mosaic, pixelated",
   "music_prompts": [
     "lofi hip hop beat, chill relaxed tempo 70 bpm, warm mellow rhodes piano chords, soft vinyl crackle, gentle boom bap drums, cozy nostalgic mood, instrumental, high quality",
     "lofi hip hop instrumental, slow dreamy tempo, soft electric piano melody, tape hiss warmth, laid back drums, calm night study mood, high quality",

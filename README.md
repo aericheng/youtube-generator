@@ -7,13 +7,39 @@ Stable Audio Open music/ambience), fully local on one RTX 5070 Ti.
 
 `LofiShortsDaily` (Windows Task Scheduler, 07:00)
 → `run_daily_hidden.vbs` → `run_daily.cmd`
-→ `pipeline/produce_daily.py` (topic pick → T2V master clip → slow-motion →
+→ `pipeline/produce_daily.py` (topic pick → master clip → slow-motion →
 music + ambience mix → loop assembly → QC → queue)
 → `pipeline/upload_queue.py` (1 per run; 2 when more than 3 videos are waiting)
 
 Output lands in `output/queue/<date>-<topic>/` (final mp4 + `metadata.json`).
 Logs: `output/queue/scheduler.log` (full run output),
-`output/queue/production.log` (one line per day: OK or SKIPPED).
+`output/queue/production.log` (one line per day: OK or SKIPPED, with the engine).
+
+## Master clip engines
+
+A14B is first, Wan 5B is the fallback (`make_master` in `produce_daily.py`):
+
+1. `generate_video_a14b.py`: Wan 2.2 T2V A14B GGUF Q4_K_M, 480x832, 81 frames at
+   16 fps, about 57 min.
+2. `upscale_clip.py`: center crop to 9:16, Real-ESRGAN general x4v3 at denoise 0.5,
+   1080x1920.
+3. `qc_people.py`: RT-DETR person check. Exit 3 means a person was found.
+
+A person triggers one retry on a new seed. A second person, a crash, a timeout or
+no slot for a retry falls back to Wan 5B, which goes through the same person check.
+If that also shows a person the day is skipped (`SKIPPED person in picture`).
+The person check misses blurred, very dark or small people.
+
+The retry and 5B pass the idle gate again, and must also start before their
+deadlines: `IDLE_DEADLINE` (19:40) for a retry, `FALLBACK_DEADLINE` (20:10) for 5B.
+These only apply before `RESERVED_AT` (21:30), so a manual rerun later that night
+works. While the machine is busy each one waits up to its own deadline. No slot for
+5B skips the day (`SKIPPED gpu busy`).
+
+Weights live in `models/` (not in git): `models/a14b/` comes from
+`QuantStack/Wan2.2-T2V-A14B-GGUF` and `Wan-AI/Wan2.2-T2V-A14B-Diffusers`,
+`models/upscale/` from the Real-ESRGAN v0.2.5.0 release. The venv also needs
+`gguf==0.19.0`. Tests: `python tests/test_engine_fallback.py`.
 
 ## GPU guard & watchdog
 
@@ -24,12 +50,12 @@ running overnight — denoise ground at 109 s/it (normal ~20), crashed after ste
 - **Runs last (idle gate)** — added 2026-10-21 after the 07:00 run started next
   to an RL training run and a 6-worker validation job (VRAM full, RAM into
   compression). Before any GPU step `produce_daily.py` waits until the whole
-  machine is idle: free VRAM ≥ `GPU_NEED_MB` (12000 MiB), no other python process
+  machine is idle: free VRAM ≥ `GPU_NEED_MB` (14000 MiB), no other python process
   holding ≥ `OTHER_GPU_MB` (256 MiB) of VRAM (read from the Windows
-  `GPU Process Memory` counter), available RAM ≥ `RAM_FREE_GB` (16), CPU over a
+  `GPU Process Memory` counter), available RAM ≥ `RAM_FREE_GB` (24), CPU over a
   60 s sample < `CPU_BUSY_PCT` (30 %). It never starts inside `NO_START`
-  (11:30–13:00, lab-slack-watch's 12:30 meeting ASR). Busy → re-check every
-  `IDLE_CHECK_MIN` (15) minutes; no idle slot by `IDLE_DEADLINE` (20:30) → skip
+  (10:40–13:00, lab-slack-watch's 12:30 meeting ASR). Busy → re-check every
+  `IDLE_CHECK_MIN` (15) minutes; no idle slot by `IDLE_DEADLINE` (19:40) → skip
   the day: writes `<date> <topic> SKIPPED gpu busy` to `production.log`, the
   reason to `data/last-failure-reason.txt`, and exits 2. The process sets itself
   to idle CPU priority (children inherit it), and the `LofiShortsDaily` task runs
@@ -38,8 +64,9 @@ running overnight — denoise ground at 109 s/it (normal ~20), crashed after ste
   The gate only decides when to start: a heavy job launched mid-run still
   competes with it until the step watchdog below.
 - **Step watchdog** — every external step goes through `run()` with a hard
-  timeout: `STEP_TIMEOUT_MIN` (30 min) default, `GEN_TIMEOUT_MIN` (60 min) for
-  T2V; a normal full run is ~20 min total. On timeout the whole process tree
+  timeout: `STEP_TIMEOUT_MIN` (30 min) default, `A14B_TIMEOUT_MIN` (90 min) for
+  A14B, `GEN_TIMEOUT_MIN` (60 min) for Wan 5B; a normal full run is ~70 min
+  total. On timeout the whole process tree
   is killed (`taskkill /F /T`) so nothing can hold RAM/VRAM indefinitely.
 
 All knobs are constants at the top of `pipeline/produce_daily.py`.
