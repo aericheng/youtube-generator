@@ -41,6 +41,22 @@ Weights live in `models/` (not in git): `models/a14b/` comes from
 `models/upscale/` from the Real-ESRGAN v0.2.5.0 release. The venv also needs
 `gguf==0.19.0`. Tests: `python tests/test_engine_fallback.py`.
 
+## Upload channel gate
+
+`upload_queue.py` only uploads when the OAuth token acts as exactly the channel
+in `upload_channel_id` (`pipeline/pool/config.json`), so re-authorizing on the
+wrong account cannot publish to it. Empty id: uploads pause, production keeps
+running, and videos wait in the queue (exit 0, no alert). Id set, videos waiting,
+and the token missing or on another channel: nothing uploads and the run exits 1,
+which raises the failure alert.
+After a pause the backlog drains at the normal rate: 2 videos per run while more
+than 3 are waiting, otherwise 1.
+
+To switch channels: run `.venv\Scripts\python.exe pipeline\yt_auth.py`, pick the
+target account, check the channel it prints, then put that id in
+`upload_channel_id`. The old token stays in `secrets/` as
+`token.json.bak-<timestamp>`. Tests: `python tests/test_upload_guard.py`.
+
 ## GPU guard & watchdog
 
 Added after the 2026-07-23 incident: the 03:30 run collided with a game left

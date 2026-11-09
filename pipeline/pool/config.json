@@ -15,6 +15,7 @@
   "target_seconds": 75,
   "clip_seconds": 5,
   "upload_privacy": "public",
+  "upload_channel_id": "UCz4Rww8pgZa87S2tqUNhWDQ",
   "music_gain_db": -6,
   "ambient_gain_db": -14,
   "metadata_footer": "Music & ambience generated with Stable Audio Open. Powered by Stability AI.\nVisuals are AI-generated (altered or synthetic content)."

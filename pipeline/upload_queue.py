@@ -11,6 +11,11 @@ compliance audit). Pre-audit API uploads are permanently locked private, so
 uploading real videos before approval would destroy them. For pre-audit
 smoke testing use pipeline/yt_smoketest.py with a throwaway file instead.
 
+Channel gate: uploads only run when the OAuth token resolves to exactly the
+channel in config upload_channel_id, so a re-authorization on the wrong account
+can never publish to it. Empty id: uploads pause and videos wait in the queue.
+A mismatch exits 1, which raises the daily failure alert.
+
 Usage: python pipeline/upload_queue.py [--max N] [--dry-run]
 """
 import argparse
@@ -47,6 +52,12 @@ def yt_client():
         creds.refresh(Request())
         token.write_text(creds.to_json(), encoding="utf-8")
     return build("youtube", "v3", credentials=creds)
+
+
+def authorized_channels(yt) -> list:
+    """Ids of the channels the current token acts as."""
+    res = yt.channels().list(part="id", mine=True).execute()
+    return [c["id"] for c in res.get("items", [])]
 
 
 def pending_videos() -> list:
@@ -101,9 +112,11 @@ def main() -> None:
     if not todo:
         print("nothing to upload")
         return
+    expected = str(cfg.get("upload_channel_id") or "").strip()
     if args.dry_run:
+        target = expected or "nowhere, uploads paused (upload_channel_id not set)"
         for video, _, meta in todo:
-            print(f"would upload [{privacy}]: {video.name} - {meta['title']}")
+            print(f"would upload [{privacy}] to {target}: {video.name} - {meta['title']}")
         return
     if privacy != "public":
         print(f"upload_privacy is '{privacy}' (pre-audit) - queue auto-upload "
@@ -111,11 +124,22 @@ def main() -> None:
               "locked private. Set upload_privacy to 'public' after the audit "
               "passes.")
         return
-    if not (SECRETS / "token.json").exists():
-        print("no OAuth token yet (run pipeline/yt_auth.py) - skipping upload")
+    if not expected:
+        print(f"upload_channel_id is not set - uploads paused, {len(pending)} "
+              "video(s) waiting in the queue. Run pipeline/yt_auth.py on the "
+              "target channel, then set the id in pipeline/pool/config.json.")
         return
+    if not (SECRETS / "token.json").exists():
+        print("no OAuth token, but upload_channel_id is set - nothing can upload. "
+              "Run pipeline/yt_auth.py.", file=sys.stderr)
+        sys.exit(1)
 
     yt = yt_client()
+    actual = authorized_channels(yt)
+    if actual != [expected]:
+        print(f"REFUSING to upload: token acts as {actual}, config "
+              f"upload_channel_id is {expected}", file=sys.stderr)
+        sys.exit(1)
     failed = 0
     for video, meta_file, meta in todo:
         print(f"uploading [{privacy}]: {video.name}", flush=True)
